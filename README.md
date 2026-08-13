@@ -96,8 +96,8 @@ xml2rfc draft-rajappa-httpbis-connection-contamination-01.xml \
 
 | Version | Date | Notes |
 |---|---|---|
-| `-00` | 2026 | Initial submission |
-| `-01` | 2026 | Fixed stale cross-references (§5.4, §6.2, §6.3); added §6.5 cache contamination mitigation; expanded HTTP/2 parallel note (§4.2) with parallel-BCP pointer; justified revalidation MUSTs with implementation evidence; upgraded non-archival references to conference proceedings; moved RFC 2119 boilerplate to §2; corrected xml2rfc `{:unnumbered}` syntax in appendices; added missing COMSNETS 2024 first author |
+| `-00` | 2026-08-13 | Initial submission |
+| `-01` | 2026-08-13 | Fixed stale cross-references (§5.4, §6.2, §6.3); added §6.5 cache contamination mitigation; expanded HTTP/2 parallel note (§4.2) with parallel-BCP pointer; justified revalidation MUSTs with implementation evidence; upgraded non-archival references to conference proceedings; moved RFC 2119 boilerplate to §2; corrected xml2rfc `{:unnumbered}` syntax in appendices; added missing COMSNETS 2024 first author |
 
 ---
 
