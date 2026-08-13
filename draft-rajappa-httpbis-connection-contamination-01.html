@@ -1,0 +1,2123 @@
+<!DOCTYPE html>
+<html lang="en" class="Internet-Draft">
+<head>
+<meta charset="utf-8">
+<meta content="Common,Latin" name="scripts">
+<meta content="initial-scale=1.0" name="viewport">
+<title>Mitigating HTTP/3 Connection Contamination in Multi-Tenant and CDN-Fronted Deployments</title>
+<meta content="Madhusudhan Rajappa" name="author">
+<meta content='
+       HTTP/3   clients commonly reuse ("coalesce") an existing QUIC  
+connection for requests to a second origin when the TLS certificate presented on
+that connection is also valid for the second origin, even though the two origins
+may route to entirely different backends. This document describes
+"connection contamination," a class of security exposure that arises when a
+routing layer -- reverse proxy, load balancer, or CDN edge -- determines backend
+routing using a signal established at connection setup rather than re-validated
+per request. Under that condition, a coalesced connection can be used to reach
+an unintended backend origin, potentially enabling cross-tenant data leakage,
+authentication bypass, and response-queue interference analogous to HTTP request
+smuggling. 
+       This document defines the underlying mechanism, characterizes the attacker model,
+distinguishes connection contamination from related QUIC exposures, and provides
+normative operational guidance for implementers and operators of HTTP/3-terminating
+infrastructure. 
+    ' name="description">
+<meta content="xml2rfc 3.34.0" name="generator">
+<meta content="HTTP/3" name="keyword">
+<meta content="QUIC" name="keyword">
+<meta content="connection coalescing" name="keyword">
+<meta content="connection contamination" name="keyword">
+<meta content="TLS certificate scope" name="keyword">
+<meta content="421 Misdirected Request" name="keyword">
+<meta content="draft-rajappa-httpbis-connection-contamination-01" name="ietf.draft">
+<!-- Generator version information:
+  xml2rfc 3.34.0
+    Python 3.12.3
+    ConfigArgParse 1.7.5
+    google-i18n-address 3.1.1
+    intervaltree 3.2.1
+    Jinja2 3.1.6
+    lxml 6.1.1
+    natsort 8.4.0
+    platformdirs 4.10.0
+    pycountry 26.2.16
+    PyYAML 6.0.3
+    requests 2.34.2
+    wcwidth 0.8.2
+    weasyprint 69.0
+-->
+<link href="draft-rajappa-httpbis-connection-contamination-01.xml" rel="alternate" type="application/rfc+xml">
+<link href="#copyright" rel="license">
+<style type="text/css">/*
+
+  NOTE: Changes at the bottom of this file overrides some earlier settings.
+
+  Once the style has stabilized and has been adopted as an official RFC style,
+  this can be consolidated so that style settings occur only in one place, but
+  for now the contents of this file consists first of the initial CSS work as
+  provided to the RFC Formatter (xml2rfc) work, followed by itemized and
+  commented changes found necessary during the development of the v3
+  formatters.
+
+*/
+
+/* fonts */
+@import url('https://static.ietf.org/fonts/noto-sans/import.css'); /* Sans-serif */
+@import url('https://static.ietf.org/fonts/noto-serif/import.css'); /* Serif (print) */
+@import url('https://static.ietf.org/fonts/roboto-mono/import.css'); /* Monospace */
+
+:root {
+  --font-sans: 'Noto Sans', Arial, Helvetica, sans-serif;
+  --font-serif: 'Noto Serif', 'Times', 'Times New Roman', serif;
+  --font-mono: 'Roboto Mono', Courier, 'Courier New', monospace;
+}
+
+@viewport {
+  zoom: 1.0;
+}
+@-ms-viewport {
+  width: extend-to-zoom;
+  zoom: 1.0;
+}
+/* general and mobile first */
+html {
+}
+body {
+  max-width: 90%;
+  margin: 1.5em auto;
+  color: #222;
+  background-color: #fff;
+  font-size: 14px;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  scroll-behavior: smooth;
+  overflow-wrap: break-word;
+}
+.ears {
+  display: none;
+}
+
+/* headings */
+#title, h1, h2, h3, h4, h5, h6 {
+  margin: 1em 0 0.5em;
+  font-weight: bold;
+  line-height: 1.3;
+}
+#title {
+  clear: both;
+  border-bottom: 1px solid #ddd;
+  margin: 0 0 0.5em 0;
+  padding: 1em 0 0.5em;
+}
+.author {
+  padding-bottom: 4px;
+}
+h1 {
+  font-size: 26px;
+  margin: 1em 0;
+}
+h2 {
+  font-size: 22px;
+  margin-top: -20px;  /* provide offset for in-page anchors */
+  padding-top: 33px;
+}
+h3 {
+  font-size: 18px;
+  margin-top: -36px;  /* provide offset for in-page anchors */
+  padding-top: 42px;
+}
+h4 {
+  font-size: 16px;
+  margin-top: -36px;  /* provide offset for in-page anchors */
+  padding-top: 42px;
+}
+h5, h6 {
+  font-size: 14px;
+}
+#n-copyright-notice {
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 1em;
+  margin-bottom: 1em;
+}
+/* general structure */
+p {
+  padding: 0;
+  margin: 0 0 1em 0;
+  text-align: left;
+}
+div, span {
+  position: relative;
+}
+div {
+  margin: 0;
+}
+.alignRight.art-text {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  padding: 1em 1em 0;
+  margin-bottom: 1.5em;
+}
+.alignRight.art-text pre {
+  padding: 0;
+}
+.alignRight {
+  margin: 1em 0;
+}
+.alignRight > *:first-child {
+  border: none;
+  margin: 0;
+  float: right;
+  clear: both;
+}
+.alignRight > *:nth-child(2) {
+  clear: both;
+  display: block;
+  border: none;
+}
+svg {
+  display: block;
+}
+@media print {
+  svg {
+    max-height: 850px;
+    max-width: 660px;
+  }
+}
+svg[font-family~="serif" i], svg [font-family~="serif" i] {
+  font-family: var(--font-serif);
+}
+svg[font-family~="sans-serif" i], svg [font-family~="sans-serif" i] {
+  font-family: var(--font-sans);
+}
+svg[font-family~="monospace" i], svg [font-family~="monospace" i] {
+  font-family: var(--font-mono);
+}
+.alignCenter.art-text {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  padding: 1em 1em 0;
+  margin-bottom: 1.5em;
+}
+.alignCenter.art-text pre {
+  padding: 0;
+}
+.alignCenter {
+  margin: 1em 0;
+}
+.alignCenter > *:first-child {
+  display: table;
+  border: none;
+  margin: 0 auto;
+}
+
+/* lists */
+ol, ul {
+  padding: 0;
+  margin: 0 0 1em 2em;
+}
+ol ol, ul ul, ol ul, ul ol {
+  margin-left: 1em;
+}
+li {
+  margin: 0 0 0.25em 0;
+}
+.ulCompact li {
+  margin: 0;
+}
+ul.empty, .ulEmpty {
+  list-style-type: none;
+}
+ul.empty li, .ulEmpty li {
+  margin-top: 0.5em;
+}
+ul.ulBare, li.ulBare {
+  margin-left: 0em !important;
+}
+ul.compact, .ulCompact,
+ol.compact, .olCompact {
+  line-height: 100%;
+  margin: 0 0 0 2em;
+}
+
+/* definition lists */
+dl {
+}
+dl > dt {
+  float: left;
+  margin-right: 1em;
+}
+/* 
+dl.nohang > dt {
+  float: none;
+}
+*/
+dl > dd {
+  margin-bottom: .8em;
+  min-height: 1.3em;
+}
+dl.compact > dd, .dlCompact > dd {
+  margin-bottom: 0em;
+}
+dl > dd > dl {
+  margin-top: 0.5em;
+  margin-bottom: 0em;
+}
+
+/* links */
+a {
+  text-decoration: none;
+}
+a[href] {
+  color: #22e; /* Arlen: WCAG 2019 */
+}
+a[href]:hover {
+  background-color: #f2f2f2;
+}
+figcaption a[href],
+a[href].selfRef {
+  color: #222;
+}
+/* XXX probably not this:
+a.selfRef:hover {
+  background-color: transparent;
+  cursor: default;
+} */
+
+/* Figures */
+tt, code, pre {
+  background-color: #f9f9f9;
+  font-family: var(--font-mono);
+}
+pre {
+  border: 1px solid #eee;
+  margin: 0;
+  padding: 1em;
+}
+img {
+  max-width: 100%;
+}
+figure {
+  margin: 0;
+}
+figure blockquote {
+  margin: 0.8em 0.4em 0.4em;
+}
+figcaption {
+  font-style: italic;
+  margin: 0 0 1em 0;
+}
+@media screen {
+  pre {
+    overflow-x: auto;
+    max-width: 100%;
+    max-width: calc(100% - 22px);
+  }
+}
+
+/* aside, blockquote */
+aside, blockquote {
+  margin-left: 0;
+  padding: 1.2em 2em;
+}
+blockquote {
+  background-color: #f9f9f9;
+  color: #111; /* Arlen: WCAG 2019 */
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  margin: 1em 0;
+}
+blockquote > *:last-child {
+  margin-bottom: 0;
+}
+cite {
+  display: block;
+  text-align: right;
+  font-style: italic;
+}
+.xref {
+  overflow-wrap: normal;
+}
+
+/* tables */
+table {
+  width: 100%;
+  margin: 0 0 1em;
+  border-collapse: collapse;
+  border: 1px solid #eee;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5em 0.75em;
+}
+th {
+  text-align: left;
+  background-color: #e9e9e9;
+}
+tr:nth-child(2n+1) > td {
+  background-color: #f5f5f5;
+}
+table caption {
+  font-style: italic;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+table p {
+  /* XXX to avoid bottom margin on table row signifiers. If paragraphs should
+     be allowed within tables more generally, it would be far better to select on a class. */
+  margin: 0;
+}
+
+/* pilcrow */
+a.pilcrow {
+  color: #666; /* Arlen: AHDJ 2019 */
+  text-decoration: none;
+  visibility: hidden;
+  user-select: none;
+  -ms-user-select: none;
+  -o-user-select:none;
+  -moz-user-select: none;
+  -khtml-user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+@media screen {
+  aside:hover > a.pilcrow,
+  p:hover > a.pilcrow,
+  blockquote:hover > a.pilcrow,
+  div:hover > a.pilcrow,
+  li:hover > a.pilcrow,
+  pre:hover > a.pilcrow {
+    visibility: visible;
+  }
+  a.pilcrow:hover {
+    background-color: transparent;
+  }
+}
+
+/* misc */
+hr {
+  border: 0;
+  border-top: 1px solid #eee;
+}
+.bcp14 {
+  font-variant: small-caps;
+}
+
+.role {
+  font-variant: all-small-caps;
+}
+
+/* info block */
+#identifiers {
+  margin: 0;
+  font-size: 0.9em;
+}
+#identifiers dt {
+  width: 3em;
+  clear: left;
+}
+#identifiers dd {
+  float: left;
+  margin-bottom: 0;
+}
+/* Fix PDF info block run off issue */
+@media print {
+  #identifiers dd {
+    max-width: 100%;
+  }
+}
+#identifiers .authors .author {
+  display: inline-block;
+  margin-right: 1.5em;
+}
+#identifiers .authors .org {
+  font-style: italic;
+}
+
+/* The prepared/rendered info at the very bottom of the page */
+.docInfo {
+  color: #666; /* Arlen: WCAG 2019 */
+  font-size: 0.9em;
+  font-style: italic;
+  margin-top: 2em;
+}
+.docInfo .prepared {
+  float: left;
+}
+.docInfo .prepared {
+  float: right;
+}
+
+/* table of contents */
+#toc  {
+  padding: 0.75em 0 2em 0;
+  margin-bottom: 1em;
+}
+nav.toc ul {
+  margin: 0 0.5em 0 0;
+  padding: 0;
+  list-style: none;
+}
+nav.toc li {
+  line-height: 1.3em;
+  margin: 0.75em 0;
+  padding-left: 1.2em;
+  text-indent: -1.2em;
+}
+/* references */
+.references dt {
+  text-align: right;
+  font-weight: bold;
+  min-width: 7em;
+}
+.references dd {
+  margin-left: 8em;
+  overflow: auto;
+}
+
+.refInstance {
+  margin-bottom: 1.25em;
+}
+
+.refSubseries {
+  margin-bottom: 1.25em;
+}
+
+.references .ascii {
+  margin-bottom: 0.25em;
+}
+
+/* index */
+.index ul {
+  margin: 0 0 0 1em;
+  padding: 0;
+  list-style: none;
+}
+.index ul ul {
+  margin: 0;
+}
+.index li {
+  margin: 0;
+  text-indent: -2em;
+  padding-left: 2em;
+  padding-bottom: 5px;
+}
+.indexIndex {
+  margin: 0.5em 0 1em;
+}
+.index a {
+  font-weight: 700;
+}
+/* make the index two-column on all but the smallest screens */
+@media (min-width: 600px) {
+  .index ul {
+    -moz-column-count: 2;
+    -moz-column-gap: 20px;
+  }
+  .index ul ul {
+    -moz-column-count: 1;
+    -moz-column-gap: 0;
+  }
+}
+
+/* authors */
+address.vcard {
+  font-style: normal;
+  margin: 1em 0;
+}
+
+address.vcard .nameRole {
+  font-weight: 700;
+  margin-left: 0;
+}
+address.vcard .label {
+  font-family: var(--font-sans);
+  margin: 0.5em 0;
+}
+address.vcard .type {
+  display: none;
+}
+.alternative-contact {
+  margin: 1.5em 0 1em;
+}
+hr.addr {
+  border-top: 1px dashed;
+  margin: 0;
+  color: #ddd;
+  max-width: calc(100% - 16px);
+}
+
+/* temporary notes */
+.rfcEditorRemove::before {
+  position: absolute;
+  top: 0.2em;
+  right: 0.2em;
+  padding: 0.2em;
+  content: "The RFC Editor will remove this note";
+  color: #9e2a00; /* Arlen: WCAG 2019 */
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+}
+.rfcEditorRemove {
+  position: relative;
+  padding-top: 1.8em;
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+  border-radius: 3px;
+}
+.cref {
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+  padding: 2px 4px;
+}
+.crefSource {
+  font-style: italic;
+}
+/* alternative layout for smaller screens */
+@media screen and (max-width: 1023px) {
+  body {
+    padding-top: 2em;
+  }
+  #title {
+    padding: 1em 0;
+  }
+  h1 {
+    font-size: 24px;
+  }
+  h2 {
+    font-size: 20px;
+    margin-top: -18px;  /* provide offset for in-page anchors */
+    padding-top: 38px;
+  }
+  #identifiers dd {
+    max-width: 60%;
+  }
+  #toc {
+    position: fixed;
+    z-index: 2;
+    top: 0;
+    right: 0;
+    padding: 0;
+    margin: 0;
+    background-color: inherit;
+    border-bottom: 1px solid #ccc;
+  }
+  #toc h2 {
+    margin: -1px 0 0 0;
+    padding: 4px 0 4px 6px;
+    padding-right: 1em;
+    min-width: 190px;
+    font-size: 1.1em;
+    text-align: right;
+    background-color: #444;
+    color: white;
+    cursor: pointer;
+  }
+  #toc h2::before { /* css hamburger */
+    float: right;
+    position: relative;
+    width: 1em;
+    height: 1px;
+    left: -164px;
+    margin: 6px 0 0 0;
+    background: white none repeat scroll 0 0;
+    box-shadow: 0 4px 0 0 white, 0 8px 0 0 white;
+    content: "";
+  }
+  #toc nav {
+    display: none;
+    padding: 0.5em 1em 1em;
+    overflow: auto;
+    height: calc(100vh - 48px);
+    border-left: 1px solid #ddd;
+  }
+}
+
+/* alternative layout for wide screens */
+@media screen and (min-width: 1024px) {
+  body {
+    max-width: 724px;
+    margin: 42px auto;
+    padding-left: 1.5em;
+    padding-right: 29em;
+  }
+  #toc {
+    position: fixed;
+    top: 42px;
+    right: 42px;
+    width: 25%;
+    margin: 0;
+    padding: 0 1em;
+    z-index: 1;
+  }
+  #toc h2 {
+    border-top: none;
+    border-bottom: 1px solid #ddd;
+    font-size: 1em;
+    font-weight: normal;
+    margin: 0;
+    padding: 0.25em 1em 1em 0;
+  }
+  #toc nav {
+    display: block;
+    height: calc(90vh - 84px);
+    bottom: 0;
+    padding: 0.5em 0 0;
+    overflow: auto;
+  }
+  img { /* future proofing */
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+/* pagination */
+@media print {
+  body {
+    width: 100%;
+  }
+  p {
+    orphans: 3;
+    widows: 3;
+  }
+  #n-copyright-notice {
+    border-bottom: none;
+  }
+  #toc, #n-introduction {
+    page-break-before: always;
+  }
+  #toc {
+    border-top: none;
+    padding-top: 0;
+  }
+  figure, pre {
+    page-break-inside: avoid;
+  }
+  figure {
+    overflow: scroll;
+  }
+  .breakable pre {
+    break-inside: auto;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+  }
+  h2+*, h3+*, h4+*, h5+*, h6+* {
+    page-break-before: avoid;
+  }
+  pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 10pt;
+  }
+  table {
+    border: 1px solid #ddd;
+  }
+  td {
+    border-top: 1px solid #ddd;
+  }
+}
+
+/* This is commented out here, as the string-set: doesn't
+   pass W3C validation currently */
+/*
+.ears thead .left {
+  string-set: ears-top-left content();
+}
+
+.ears thead .center {
+  string-set: ears-top-center content();
+}
+
+.ears thead .right {
+  string-set: ears-top-right content();
+}
+
+.ears tfoot .left {
+  string-set: ears-bottom-left content();
+}
+
+.ears tfoot .center {
+  string-set: ears-bottom-center content();
+}
+
+.ears tfoot .right {
+  string-set: ears-bottom-right content();
+}
+*/
+
+@page :first {
+  padding-top: 0;
+  @top-left {
+    content: normal;
+    border: none;
+  }
+  @top-center {
+    content: normal;
+    border: none;
+  }
+  @top-right {
+    content: normal;
+    border: none;
+  }
+}
+
+@page {
+  size: A4;
+  margin-bottom: 45mm;
+  padding-top: 20px;
+  /* The following is commented out here, but set appropriately by in code, as
+     the content depends on the document */
+  /*
+  @top-left {
+    content: 'Internet-Draft';
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-left {
+    content: string(ears-top-left);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-center {
+    content: string(ears-top-center);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-right {
+    content: string(ears-top-right);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @bottom-left {
+    content: string(ears-bottom-left);
+    vertical-align: top;
+    border-top: solid 1px #ccc;
+  }
+  @bottom-center {
+    content: string(ears-bottom-center);
+    vertical-align: top;
+    border-top: solid 1px #ccc;
+  }
+  @bottom-right {
+      content: '[Page ' counter(page) ']';
+      vertical-align: top;
+      border-top: solid 1px #ccc;
+  }
+  */
+
+}
+
+/* Changes introduced to fix issues found during implementation */
+/* Make sure links are clickable even if overlapped by following H* */
+a {
+  z-index: 2;
+}
+/* Separate body from document info even without intervening H1 */
+section {
+  clear: both;
+}
+
+
+/* Top align author divs, to avoid names without organization dropping level with org names */
+.author {
+  vertical-align: top;
+}
+
+/* Leave room in document info to show Internet-Draft on one line */
+#identifiers dt {
+  width: 8em;
+}
+
+/* Don't waste quite as much whitespace between label and value in doc info */
+#identifiers dd {
+  margin-left: 1em;
+}
+
+/* Give floating toc a background color (needed when it's a div inside section */
+#toc {
+  background-color: white;
+}
+
+/* Make the collapsed ToC header render white on gray also when it's a link */
+@media screen and (max-width: 1023px) {
+  #toc h2 a,
+  #toc h2 a:link,
+  #toc h2 a:focus,
+  #toc h2 a:hover,
+  #toc a.toplink,
+  #toc a.toplink:hover {
+    color: white;
+    background-color: #444;
+    text-decoration: none;
+  }
+}
+
+/* Give the bottom of the ToC some whitespace */
+@media screen and (min-width: 1024px) {
+  #toc {
+    padding: 0 0 1em 1em;
+  }
+}
+
+/* Style section numbers with more space between number and title */
+.section-number {
+  padding-right: 0.5em;
+}
+
+/* prevent monospace from becoming overly large */
+tt, code, pre {
+  font-size: 95%;
+}
+
+/* Fix the height/width aspect for ascii art*/
+.sourcecode pre,
+.art-text pre {
+  line-height: 1.12;
+}
+
+
+/* Add styling for a link in the ToC that points to the top of the document */
+a.toplink {
+  float: right;
+  margin-right: 0.5em;
+}
+
+/* Fix the dl styling to match the RFC 7992 attributes */
+dl > dt,
+dl.dlParallel > dt {
+  float: left;
+  margin-right: 1em;
+}
+dl.dlNewline > dt {
+  float: none;
+}
+
+/* Provide styling for table cell text alignment */
+table td.text-left,
+table th.text-left {
+  text-align: left;
+}
+table td.text-center,
+table th.text-center {
+  text-align: center;
+}
+table td.text-right,
+table th.text-right {
+  text-align: right;
+}
+
+/* Make the alternative author contact information look less like just another
+   author, and group it closer with the primary author contact information */
+.alternative-contact {
+  margin: 0.5em 0 0.25em 0;
+}
+address .non-ascii {
+  margin: 0 0 0 2em;
+}
+
+/* With it being possible to set tables with alignment
+  left, center, and right, { width: 100%; } does not make sense */
+table {
+  width: auto;
+}
+
+/* Avoid reference text that sits in a block with very wide left margin,
+   because of a long floating dt label.*/
+.references dd {
+  overflow: visible;
+}
+
+/* Control caption placement */
+caption {
+  caption-side: bottom;
+}
+
+/* Limit the width of the author address vcard, so names in right-to-left
+   script don't end up on the other side of the page. */
+
+address.vcard {
+  max-width: 30em;
+  margin-right: auto;
+}
+
+/* For address alignment dependent on LTR or RTL scripts */
+address div.left {
+  text-align: left;
+}
+address div.right {
+  text-align: right;
+}
+
+/* Provide table alignment support.  We can't use the alignX classes above
+   since they do unwanted things with caption and other styling. */
+table.right {
+ margin-left: auto;
+ margin-right: 0;
+}
+table.center {
+ margin-left: auto;
+ margin-right: auto;
+}
+table.left {
+ margin-left: 0;
+ margin-right: auto;
+}
+
+/* Give the table caption label the same styling as the figcaption */
+caption a[href] {
+  color: #222;
+}
+
+@media print {
+  .toplink {
+    display: none;
+  }
+
+  /* avoid overwriting the top border line with the ToC header */
+  #toc {
+    padding-top: 1px;
+  }
+
+  /* Avoid page breaks inside dl and author address entries */
+  .vcard {
+    page-break-inside: avoid;
+  }
+
+}
+/* Tweak the bcp14 keyword presentation */
+.bcp14 {
+  font-variant: small-caps;
+  font-weight: bold;
+  font-size: 0.9em;
+}
+/* Tweak the invisible space above H* in order not to overlay links in text above */
+ h2 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 31px;
+ }
+ h3 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 24px;
+ }
+ h4 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 24px;
+ }
+/* Float artwork pilcrow to the right */
+@media screen {
+  .artwork a.pilcrow {
+    display: block;
+    line-height: 0.7;
+    margin-top: 0.15em;
+  }
+}
+/* Make pilcrows on dd visible */
+@media screen {
+  dd:hover > a.pilcrow {
+    visibility: visible;
+  }
+}
+/* Make the placement of figcaption match that of a table's caption
+   by removing the figure's added bottom margin */
+.alignLeft.art-text,
+.alignCenter.art-text,
+.alignRight.art-text {
+   margin-bottom: 0;
+}
+.alignLeft,
+.alignCenter,
+.alignRight {
+  margin: 1em 0 0 0;
+}
+/* In print, the pilcrow won't show on hover, so prevent it from taking up space,
+   possibly even requiring a new line */
+@media print {
+  a.pilcrow {
+    display: none;
+  }
+}
+/* Styling for the external metadata */
+div#external-metadata {
+  background-color: #eee;
+  padding: 0.5em;
+  margin-bottom: 0.5em;
+  display: none;
+}
+div#internal-metadata {
+  padding: 0.5em;                       /* to match the external-metadata padding */
+}
+/* Styling for title RFC Number */
+h1#rfcnum {
+  clear: both;
+  margin: 0 0 -1em;
+  padding: 1em 0 0 0;
+}
+/* Make .olPercent look the same as <ol><li> */
+dl.olPercent > dd {
+  margin-bottom: 0.25em;
+  min-height: initial;
+}
+/* Give aside some styling to set it apart */
+aside {
+  border-left: 1px solid #ddd;
+  margin: 1em 0 1em 2em;
+  padding: 0.2em 2em;
+}
+aside > dl,
+aside > ol,
+aside > ul,
+aside > table,
+aside > p {
+  margin-bottom: 0.5em;
+}
+/* Additional page break settings */
+@media print {
+  figcaption, table caption {
+    page-break-before: avoid;
+  }
+}
+/* Font size adjustments for print */
+@media print {
+  body  { font-size: 10pt;      line-height: normal; max-width: 96%; }
+  h1    { font-size: 1.72em;    padding-top: 1.5em; } /* 1*1.2*1.2*1.2 */
+  h2    { font-size: 1.44em;    padding-top: 1.5em; } /* 1*1.2*1.2 */
+  h3    { font-size: 1.2em;     padding-top: 1.5em; } /* 1*1.2 */
+  h4    { font-size: 1em;       padding-top: 1.5em; }
+  h5, h6 { font-size: 1em;      margin: initial; padding: 0.5em 0 0.3em; }
+}
+/* Sourcecode margin in print, when there's no pilcrow */
+@media print {
+  .artwork,
+  .artwork > pre,
+  .sourcecode {
+    margin-bottom: 1em;
+  }
+}
+/* Avoid narrow tables forcing too narrow table captions, which may render badly */
+table {
+  min-width: 20em;
+}
+/* ol type a */
+ol.type-a { list-style-type: lower-alpha; }
+ol.type-A { list-style-type: upper-alpha; }
+ol.type-i { list-style-type: lower-roman; }
+ol.type-I { list-style-type: upper-roman; }
+/* Apply the print table and row borders in general, on request from the RPC,
+and increase the contrast between border and odd row background slightly */
+table {
+  border: 1px solid #ddd;
+}
+td {
+  border-top: 1px solid #ddd;
+}
+tr {
+  break-inside: avoid;
+}
+tr:nth-child(2n+1) > td {
+  background-color: #f8f8f8;
+}
+/* Use style rules to govern display of the TOC. */
+@media screen and (max-width: 1023px) {
+  #toc nav { display: none; }
+  #toc.active nav { display: block; }
+}
+/* Add support for keepWithNext */
+.keepWithNext {
+  break-after: avoid-page;
+  break-after: avoid-page;
+}
+/* Add support for keepWithPrevious */
+.keepWithPrevious {
+  break-before: avoid-page;
+}
+/* Change the approach to avoiding breaks inside artwork etc. */
+figure, pre, table, .artwork, .sourcecode  {
+  break-before: auto;
+  break-after: auto;
+}
+/* Avoid breaks between <dt> and <dd> */
+dl {
+  break-before: auto;
+  break-inside: auto;
+}
+dt {
+  break-before: auto;
+  break-after: avoid-page;
+}
+dd {
+  break-before: avoid-page;
+  break-after: auto;
+  orphans: 3;
+  widows: 3
+}
+span.break, dd.break {
+  margin-bottom: 0;
+  min-height: 0;
+  break-before: auto;
+  break-inside: auto;
+  break-after: auto;
+}
+/* Undo break-before ToC */
+@media print {
+  #toc {
+    break-before: auto;
+  }
+}
+/* Text in compact lists should not get extra bottom margin space,
+   since that would makes the list not compact */
+ul.compact p, .ulCompact p,
+ol.compact p, .olCompact p {
+ margin: 0;
+}
+/* But the list as a whole needs the extra space at the end */
+section ul.compact,
+section .ulCompact,
+section ol.compact,
+section .olCompact {
+  margin-bottom: 1em;                    /* same as p not within ul.compact etc. */
+}
+/* The tt and code background above interferes with for instance table cell
+   backgrounds.  Changed to something a bit more selective. */
+tt, code {
+  background-color: transparent;
+}
+p tt, p code, li tt, li code, dt tt, dt code {
+  background-color: #f8f8f8;
+}
+/* Tweak the pre margin -- 0px doesn't come out well */
+pre {
+   margin-top: 0.5px;
+}
+/* Tweak the compact list text */
+ul.compact, .ulCompact,
+ol.compact, .olCompact,
+dl.compact, .dlCompact {
+  line-height: normal;
+}
+/* Don't add top margin for nested lists */
+li > ul, li > ol, li > dl,
+dd > ul, dd > ol, dd > dl,
+dl > dd > dl {
+  margin-top: initial;
+}
+/* Elements that should not be rendered on the same line as a <dt> */
+/* This should match the element list in writer.text.TextWriter.render_dl() */
+dd > div.artwork:first-child,
+dd > aside:first-child,
+dd > blockquote:first-child,
+dd > figure:first-child,
+dd > ol:first-child,
+dd > div.sourcecode:first-child,
+dd > table:first-child,
+dd > ul:first-child {
+  clear: left;
+}
+/* fix for weird browser behaviour when <dd/> is empty */
+dt+dd:empty::before{
+  content: "\00a0";
+}
+/* Make paragraph spacing inside <li> smaller than in body text, to fit better within the list */
+li > p {
+  margin-bottom: 0.5em
+}
+/* Don't let p margin spill out from inside list items */
+li > p:last-of-type:only-child {
+  margin-bottom: 0;
+}
+</style>
+<link href="rfc-local.css" rel="stylesheet" type="text/css">
+<script type="application/javascript">async function addMetadata(){try{const e=document.styleSheets[0].cssRules;for(let t=0;t<e.length;t++)if(/#identifiers/.exec(e[t].selectorText)){const a=e[t].cssText.replace("#identifiers","#external-updates");document.styleSheets[0].insertRule(a,document.styleSheets[0].cssRules.length)}}catch(e){console.log(e)}const e=document.getElementById("external-metadata");if(e)try{var t,a="",o=function(e){const t=document.getElementsByTagName("meta");for(let a=0;a<t.length;a++)if(t[a].getAttribute("name")===e)return t[a].getAttribute("content");return""}("rfc.number");if(o){t="https://www.rfc-editor.org/rfc/rfc"+o+".json";try{const e=await fetch(t);a=await e.json()}catch(e){t=document.URL.indexOf("html")>=0?document.URL.replace(/html$/,"json"):document.URL+".json";const o=await fetch(t);a=await o.json()}}if(!a)return;e.style.display="block";const s="",d="https://datatracker.ietf.org/doc",n="https://datatracker.ietf.org/ipr/search",c="https://www.rfc-editor.org/info",l=a.doc_id.toLowerCase(),i=a.doc_id.slice(0,3).toLowerCase(),f=a.doc_id.slice(3).replace(/^0+/,""),u={status:"Status",obsoletes:"Obsoletes",obsoleted_by:"Obsoleted By",updates:"Updates",updated_by:"Updated By",see_also:"See Also",errata_url:"Errata"};let h="<dl style='overflow:hidden' id='external-updates'>";["status","obsoletes","obsoleted_by","updates","updated_by","see_also","errata_url"].forEach(e=>{if("status"==e){a[e]=a[e].toLowerCase();var t=a[e].split(" "),o=t.length,w="",p=1;for(let e=0;e<o;e++)p<o?w=w+r(t[e])+" ":w+=r(t[e]),p++;a[e]=w}else if("obsoletes"==e||"obsoleted_by"==e||"updates"==e||"updated_by"==e){var g,m="",b=1;g=a[e].length;for(let t=0;t<g;t++)a[e][t]&&(a[e][t]=String(a[e][t]).toLowerCase(),m=b<g?m+"<a href='"+s+"/rfc/".concat(a[e][t])+"'>"+a[e][t].slice(3)+"</a>, ":m+"<a href='"+s+"/rfc/".concat(a[e][t])+"'>"+a[e][t].slice(3)+"</a>",b++);a[e]=m}else if("see_also"==e){var y,L="",C=1;y=a[e].length;for(let t=0;t<y;t++)if(a[e][t]){a[e][t]=String(a[e][t]);var _=a[e][t].slice(0,3),v=a[e][t].slice(3).replace(/^0+/,"");L=C<y?"RFC"!=_?L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+_+" "+v+"</a>, ":L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+v+"</a>, ":"RFC"!=_?L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+_+" "+v+"</a>":L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+v+"</a>",C++}a[e]=L}else if("errata_url"==e){var R="";R=a[e]?R+"<a href='"+a[e]+"'>Errata exist</a> | <a href='"+d+"/"+l+"'>Datatracker</a>| <a href='"+n+"/?"+i+"="+f+"&submit="+i+"'>IPR</a> | <a href='"+c+"/"+l+"'>Info page</a>":"<a href='"+d+"/"+l+"'>Datatracker</a> | <a href='"+n+"/?"+i+"="+f+"&submit="+i+"'>IPR</a> | <a href='"+c+"/"+l+"'>Info page</a>",a[e]=R}""!=a[e]?"Errata"==u[e]?h+=`<dt>More info:</dt><dd>${a[e]}</dd>`:h+=`<dt>${u[e]}:</dt><dd>${a[e]}</dd>`:"Errata"==u[e]&&(h+=`<dt>More info:</dt><dd>${a[e]}</dd>`)}),h+="</dl>",e.innerHTML=h}catch(e){console.log(e)}else console.log("Could not locate metadata <div> element");function r(e){return e.charAt(0).toUpperCase()+e.slice(1)}}window.removeEventListener("load",addMetadata),window.addEventListener("load",addMetadata);</script>
+</head>
+<body class="xml2rfc">
+<table class="ears">
+<thead><tr>
+<td class="left">Internet-Draft</td>
+<td class="center">HTTP3 Connection Contamination Mitigatio</td>
+<td class="right">August 2026</td>
+</tr></thead>
+<tfoot><tr>
+<td class="left">Rajappa</td>
+<td class="center">Expires 14 February 2027</td>
+<td class="right">[Page]</td>
+</tr></tfoot>
+</table>
+<div id="external-metadata" class="document-information"></div>
+<div id="internal-metadata" class="document-information">
+<dl id="identifiers">
+<dt class="label-workgroup">Workgroup:</dt>
+<dd class="workgroup">httpbis</dd>
+<dt class="label-internet-draft">Internet-Draft:</dt>
+<dd class="internet-draft">draft-rajappa-httpbis-connection-contamination-01</dd>
+<dt class="label-published">Published:</dt>
+<dd class="published">
+<time datetime="2026-08-13" class="published">13 August 2026</time>
+    </dd>
+<dt class="label-intended-status">Intended Status:</dt>
+<dd class="intended-status">Best Current Practice</dd>
+<dt class="label-expires">Expires:</dt>
+<dd class="expires"><time datetime="2027-02-14">14 February 2027</time></dd>
+<dt class="label-authors">Author:</dt>
+<dd class="authors">
+<div class="author">
+      <div class="author-name">M. Rajappa</div>
+<div class="org">IBM</div>
+</div>
+</dd>
+</dl>
+</div>
+<h1 id="title">Mitigating HTTP/3 Connection Contamination in Multi-Tenant and CDN-Fronted Deployments</h1>
+<section id="section-abstract">
+      <h2 id="abstract"><a href="#abstract" class="selfRef">Abstract</a></h2>
+<p id="section-abstract-1">HTTP/3 <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> clients commonly reuse ("coalesce") an existing QUIC <span>[<a href="#RFC9000" class="cite xref">RFC9000</a>]</span>
+connection for requests to a second origin when the TLS certificate presented on
+that connection is also valid for the second origin, even though the two origins
+may route to entirely different backends. This document describes
+"connection contamination," a class of security exposure that arises when a
+routing layer -- reverse proxy, load balancer, or CDN edge -- determines backend
+routing using a signal established at connection setup rather than re-validated
+per request. Under that condition, a coalesced connection can be used to reach
+an unintended backend origin, potentially enabling cross-tenant data leakage,
+authentication bypass, and response-queue interference analogous to HTTP request
+smuggling.<a href="#section-abstract-1" class="pilcrow">¶</a></p>
+<p id="section-abstract-2">This document defines the underlying mechanism, characterizes the attacker model,
+distinguishes connection contamination from related QUIC exposures, and provides
+normative operational guidance for implementers and operators of HTTP/3-terminating
+infrastructure.<a href="#section-abstract-2" class="pilcrow">¶</a></p>
+</section>
+<div id="status-of-memo">
+<section id="section-boilerplate.1">
+        <h2 id="name-status-of-this-memo">
+<a href="#name-status-of-this-memo" class="section-name selfRef">Status of This Memo</a>
+        </h2>
+<p id="section-boilerplate.1-1">
+        This Internet-Draft is submitted in full conformance with the
+        provisions of BCP 78 and BCP 79.<a href="#section-boilerplate.1-1" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-2">
+        Internet-Drafts are working documents of the Internet Engineering Task
+        Force (IETF). Note that other groups may also distribute working
+        documents as Internet-Drafts. The list of current Internet-Drafts is
+        at <span><a href="https://datatracker.ietf.org/drafts/current/">https://datatracker.ietf.org/drafts/current/</a></span>.<a href="#section-boilerplate.1-2" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-3">
+        Internet-Drafts are draft documents valid for a maximum of six months
+        and may be updated, replaced, or obsoleted by other documents at any
+        time. It is inappropriate to use Internet-Drafts as reference
+        material or to cite them other than as "work in progress."<a href="#section-boilerplate.1-3" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-4">
+        This Internet-Draft will expire on 14 February 2027.<a href="#section-boilerplate.1-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="copyright">
+<section id="section-boilerplate.2">
+        <h2 id="name-copyright-notice">
+<a href="#name-copyright-notice" class="section-name selfRef">Copyright Notice</a>
+        </h2>
+<p id="section-boilerplate.2-1">
+            Copyright (c) 2026 IETF Trust and the persons identified as the
+            document authors. All rights reserved.<a href="#section-boilerplate.2-1" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.2-2">
+            This document is subject to BCP 78 and the IETF Trust's Legal
+            Provisions Relating to IETF Documents
+            (<span><a href="https://trustee.ietf.org/license-info">https://trustee.ietf.org/license-info</a></span>) in effect on the date of
+            publication of this document. Please review these documents
+            carefully, as they describe your rights and restrictions with
+            respect to this document. Code Components extracted from this
+            document must include Revised BSD License text as described in
+            Section 4.e of the Trust Legal Provisions and are provided without
+            warranty as described in the Revised BSD License.<a href="#section-boilerplate.2-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="toc">
+<section id="section-toc.1">
+        <a href="#" onclick="scroll(0,0)" class="toplink">▲</a><h2 id="name-table-of-contents">
+<a href="#name-table-of-contents" class="section-name selfRef">Table of Contents</a>
+        </h2>
+<nav class="toc"><ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1">
+            <p id="section-toc.1-1.1.1" class="keepWithNext"><a href="#section-1" class="auto internal xref">1</a>.  <a href="#name-introduction" class="internal xref">Introduction</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2">
+            <p id="section-toc.1-1.2.1" class="keepWithNext"><a href="#section-2" class="auto internal xref">2</a>.  <a href="#name-terminology" class="internal xref">Terminology</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3">
+            <p id="section-toc.1-1.3.1" class="keepWithNext"><a href="#section-3" class="auto internal xref">3</a>.  <a href="#name-applicability" class="internal xref">Applicability</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4">
+            <p id="section-toc.1-1.4.1"><a href="#section-4" class="auto internal xref">4</a>.  <a href="#name-background-connection-coale" class="internal xref">Background: Connection Coalescing</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.1">
+                <p id="section-toc.1-1.4.2.1.1"><a href="#section-4.1" class="auto internal xref">4.1</a>.  <a href="#name-protocol-rules" class="internal xref">Protocol Rules</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2">
+                <p id="section-toc.1-1.4.2.2.1"><a href="#section-4.2" class="auto internal xref">4.2</a>.  <a href="#name-relationship-to-http-2-coal" class="internal xref">Relationship to HTTP/2 Coalescing</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3">
+                <p id="section-toc.1-1.4.2.3.1"><a href="#section-4.3" class="auto internal xref">4.3</a>.  <a href="#name-client-behavior-variance" class="internal xref">Client Behavior Variance</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5">
+            <p id="section-toc.1-1.5.1"><a href="#section-5" class="auto internal xref">5</a>.  <a href="#name-connection-contamination-th" class="internal xref">Connection Contamination: Threat Description</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.1">
+                <p id="section-toc.1-1.5.2.1.1"><a href="#section-5.1" class="auto internal xref">5.1</a>.  <a href="#name-attacker-model" class="internal xref">Attacker Model</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.2">
+                <p id="section-toc.1-1.5.2.2.1"><a href="#section-5.2" class="auto internal xref">5.2</a>.  <a href="#name-threat-conditions" class="internal xref">Threat Conditions</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.3">
+                <p id="section-toc.1-1.5.2.3.1"><a href="#section-5.3" class="auto internal xref">5.3</a>.  <a href="#name-attack-path" class="internal xref">Attack Path</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.4">
+                <p id="section-toc.1-1.5.2.4.1"><a href="#section-5.4" class="auto internal xref">5.4</a>.  <a href="#name-potential-consequences" class="internal xref">Potential Consequences</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6">
+            <p id="section-toc.1-1.6.1"><a href="#section-6" class="auto internal xref">6</a>.  <a href="#name-recommendations" class="internal xref">Recommendations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.1">
+                <p id="section-toc.1-1.6.2.1.1"><a href="#section-6.1" class="auto internal xref">6.1</a>.  <a href="#name-per-request-host-revalidati" class="internal xref">Per-Request Host Revalidation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.2">
+                <p id="section-toc.1-1.6.2.2.1"><a href="#section-6.2" class="auto internal xref">6.2</a>.  <a href="#name-certificate-scope-minimizat" class="internal xref">Certificate Scope Minimization</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.3">
+                <p id="section-toc.1-1.6.2.3.1"><a href="#section-6.3" class="auto internal xref">6.3</a>.  <a href="#name-sni-and-authority-consisten" class="internal xref">SNI and :authority Consistency Enforcement</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.4">
+                <p id="section-toc.1-1.6.2.4.1"><a href="#section-6.4" class="auto internal xref">6.4</a>.  <a href="#name-trust-boundary-segmentation" class="internal xref">Trust-Boundary Segmentation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.5">
+                <p id="section-toc.1-1.6.2.5.1"><a href="#section-6.5" class="auto internal xref">6.5</a>.  <a href="#name-cache-contamination-mitigat" class="internal xref">Cache Contamination Mitigation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.6">
+                <p id="section-toc.1-1.6.2.6.1"><a href="#section-6.6" class="auto internal xref">6.6</a>.  <a href="#name-detection-guidance" class="internal xref">Detection Guidance</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7">
+            <p id="section-toc.1-1.7.1"><a href="#section-7" class="auto internal xref">7</a>.  <a href="#name-security-considerations" class="internal xref">Security Considerations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.1">
+                <p id="section-toc.1-1.7.2.1.1"><a href="#section-7.1" class="auto internal xref">7.1</a>.  <a href="#name-client-behavior-must-not-be" class="internal xref">Client Behavior Must Not Be Assumed Stable</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.2">
+                <p id="section-toc.1-1.7.2.2.1"><a href="#section-7.2" class="auto internal xref">7.2</a>.  <a href="#name-connection-migration-intera" class="internal xref">Connection Migration Interaction</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.3">
+                <p id="section-toc.1-1.7.2.3.1"><a href="#section-7.3" class="auto internal xref">7.3</a>.  <a href="#name-421-misdirected-request-as-" class="internal xref">421 Misdirected Request as a Defense Mechanism</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.4">
+                <p id="section-toc.1-1.7.2.4.1"><a href="#section-7.4" class="auto internal xref">7.4</a>.  <a href="#name-scope-of-normative-requirem" class="internal xref">Scope of Normative Requirements</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8">
+            <p id="section-toc.1-1.8.1"><a href="#section-8" class="auto internal xref">8</a>.  <a href="#name-iana-considerations" class="internal xref">IANA Considerations</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9">
+            <p id="section-toc.1-1.9.1"><a href="#section-9" class="auto internal xref">9</a>.  <a href="#name-references" class="internal xref">References</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.1">
+                <p id="section-toc.1-1.9.2.1.1"><a href="#section-9.1" class="auto internal xref">9.1</a>.  <a href="#name-normative-references" class="internal xref">Normative References</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.2">
+                <p id="section-toc.1-1.9.2.2.1"><a href="#section-9.2" class="auto internal xref">9.2</a>.  <a href="#name-informative-references" class="internal xref">Informative References</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10">
+            <p id="section-toc.1-1.10.1"><a href="#appendix-A" class="auto internal xref"></a><a href="#name-acknowledgments" class="internal xref">Acknowledgments</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11">
+            <p id="section-toc.1-1.11.1"><a href="#appendix-B" class="auto internal xref"></a><a href="#name-changes-from-00" class="internal xref">Changes from -00</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12">
+            <p id="section-toc.1-1.12.1"><a href="#appendix-C" class="auto internal xref"></a><a href="#name-authors-address" class="internal xref">Author's Address</a></p>
+</li>
+        </ul>
+</nav>
+</section>
+</div>
+<div id="introduction">
+<section id="section-1">
+      <h2 id="name-introduction">
+<a href="#section-1" class="section-number selfRef">1. </a><a href="#name-introduction" class="section-name selfRef">Introduction</a>
+      </h2>
+<p id="section-1-1">HTTP/3 <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> and its QUIC <span>[<a href="#RFC9000" class="cite xref">RFC9000</a>]</span> transport depart from a long-standing
+assumption in HTTP/1.1- and HTTP/2-era infrastructure: that a network connection
+is uniquely and durably associated with a single origin for the lifetime of that
+connection, and that routing decisions made when the connection is established
+remain valid for every request subsequently carried on it.<a href="#section-1-1" class="pilcrow">¶</a></p>
+<p id="section-1-2">To reduce handshake overhead, HTTP/3 clients are permitted to reuse an
+already-open connection for a request to a second origin when the TLS
+<span>[<a href="#RFC8446" class="cite xref">RFC8446</a>]</span> certificate negotiated on that connection is also valid for the
+second origin -- for example via a Subject Alternative Name (SAN) or wildcard
+entry -- and the client considers the second origin's resolved address
+equivalent to the address already in use (see <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3).
+This behavior, known as connection coalescing, is a performance optimization
+with no inherent security implication at the protocol level.<a href="#section-1-2" class="pilcrow">¶</a></p>
+<p id="section-1-3">Notably, <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3 already anticipates a server's need to
+reject connection reuse for a given origin, noting that a server "that
+does not wish clients to reuse HTTP/3 connections for a particular origin
+can indicate that it is not authoritative for a request by sending a 421
+(Misdirected Request) status code" (<span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span> Section 7.4). This
+document's normative contribution is not a new protocol mechanism, but a
+recommendation that this existing, currently optional behavior become
+mandatory for the specific deployment pattern described in Section 4 --
+where the operational cost of an occasional false rejection is
+substantially lower than the cost of silent cross-tenant data exposure.<a href="#section-1-3" class="pilcrow">¶</a></p>
+<p id="section-1-4">A security-relevant side effect arises only when infrastructure in front of
+the origin -- a reverse proxy, load balancer, or CDN edge -- makes or caches a
+routing decision at connection establishment (or on the connection's first
+request) rather than re-evaluating the effective request host on every request
+the connection subsequently carries. Under that condition, a client holding a
+coalescing-eligible connection to one origin can direct a subsequent request on
+that same connection to a different origin sharing the same certificate, and
+have that request delivered to the second origin's backend even though the
+underlying transport and TLS session were established against the first. This
+document refers to that condition as "connection contamination," following the
+terminology introduced in <span>[<a href="#KETTLE2022" class="cite xref">KETTLE2022</a>]</span>.<a href="#section-1-4" class="pilcrow">¶</a></p>
+<p id="section-1-5">Connection contamination is architecturally distinct from, though sharing a
+common root cause with, QUIC connection-migration abuse against stateful
+middleboxes as described in <span>[<a href="#COMSNETS2024" class="cite xref">COMSNETS2024</a>]</span>. The former is a
+request-routing and data-isolation exposure; the latter is a resource-exhaustion
+and availability exposure. This document addresses connection contamination only.<a href="#section-1-5" class="pilcrow">¶</a></p>
+<p id="section-1-6">This document applies to multi-tenant SaaS deployments and CDN-fronted
+architectures in which two or more distinct origins are served behind a shared
+TLS certificate and a shared HTTP/3 listener. Single-origin deployments are
+outside its scope.<a href="#section-1-6" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="terminology">
+<section id="section-2">
+      <h2 id="name-terminology">
+<a href="#section-2" class="section-number selfRef">2. </a><a href="#name-terminology" class="section-name selfRef">Terminology</a>
+      </h2>
+<p id="section-2-1">The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL
+NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED",
+"MAY", and "OPTIONAL" in this document are to be interpreted as
+described in BCP 14 <span>[<a href="#RFC2119" class="cite xref">RFC2119</a>]</span> <span>[<a href="#RFC8174" class="cite xref">RFC8174</a>]</span> when, and only when, they
+appear in all capitals, as shown here.<a href="#section-2-1" class="pilcrow">¶</a></p>
+<p id="section-2-2">The following terms are used throughout this document:<a href="#section-2-2" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-2-3">
+        <dt id="section-2-3.1"><strong>Origin:</strong></dt>
+        <dd style="margin-left: 1.5em" id="section-2-3.2">
+          <p id="section-2-3.2.1">As defined in <span>[<a href="#RFC6454" class="cite xref">RFC6454</a>]</span>, the tuple of (scheme, host, port) that
+identifies a distinct web origin. Two origins are considered isolated
+when no intentional cross-origin resource sharing or routing is permitted
+between them.<a href="#section-2-3.2.1" class="pilcrow">¶</a></p>
+</dd>
+        <dd class="break"></dd>
+<dt id="section-2-3.3"><strong>Connection Coalescing:</strong></dt>
+        <dd style="margin-left: 1.5em" id="section-2-3.4">
+          <p id="section-2-3.4.1">The HTTP/3 client behavior, specified in <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3, by which
+an existing QUIC connection may be reused for requests to a second origin
+when the certificate already negotiated on that connection is also valid for
+the second origin and the resolved addresses are considered equivalent.<a href="#section-2-3.4.1" class="pilcrow">¶</a></p>
+</dd>
+        <dd class="break"></dd>
+<dt id="section-2-3.5"><strong>Connection Contamination:</strong></dt>
+        <dd style="margin-left: 1.5em" id="section-2-3.6">
+          <p id="section-2-3.6.1">The condition, introduced in <span>[<a href="#KETTLE2022" class="cite xref">KETTLE2022</a>]</span> and defined precisely in
+Section 4 of this document, in which a coalesced request is delivered to
+an unintended backend origin due to stale or connection-scoped routing at
+a routing layer.<a href="#section-2-3.6.1" class="pilcrow">¶</a></p>
+</dd>
+        <dd class="break"></dd>
+<dt id="section-2-3.7"><strong>Routing Layer:</strong></dt>
+        <dd style="margin-left: 1.5em" id="section-2-3.8">
+          <p id="section-2-3.8.1">A reverse proxy, load balancer, or CDN edge component that receives HTTP/3
+connections from clients and forwards requests to one or more upstream
+backend origins based on request metadata.<a href="#section-2-3.8.1" class="pilcrow">¶</a></p>
+</dd>
+        <dd class="break"></dd>
+<dt id="section-2-3.9"><strong>Effective Request Host:</strong></dt>
+        <dd style="margin-left: 1.5em" id="section-2-3.10">
+          <p id="section-2-3.10.1">The value of the <code>:authority</code> pseudo-header field as defined in
+<span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 4.3.1 (see also <span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span> Section 7.2 for the
+Host/<code>:authority</code> relationship) carried on an individual HTTP/3 request,
+which identifies the target origin for that request independently of any
+connection-level signal.<a href="#section-2-3.10.1" class="pilcrow">¶</a></p>
+</dd>
+      <dd class="break"></dd>
+</dl>
+</section>
+</div>
+<div id="applicability">
+<section id="section-3">
+      <h2 id="name-applicability">
+<a href="#section-3" class="section-number selfRef">3. </a><a href="#name-applicability" class="section-name selfRef">Applicability</a>
+      </h2>
+<p id="section-3-1">This document applies to deployments meeting all of the following conditions:<a href="#section-3-1" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-3-2">
+<li id="section-3-2.1">
+          <p id="section-3-2.1.1">One or more HTTP/3 listeners terminate connections on behalf of two or
+more distinct origins (as defined in <span>[<a href="#RFC6454" class="cite xref">RFC6454</a>]</span>).<a href="#section-3-2.1.1" class="pilcrow">¶</a></p>
+</li>
+        <li id="section-3-2.2">
+          <p id="section-3-2.2.1">Those origins share a TLS certificate whose Subject Alternative Name (SAN)
+set or wildcard pattern covers more than one origin hostname.<a href="#section-3-2.2.1" class="pilcrow">¶</a></p>
+</li>
+        <li id="section-3-2.3">
+          <p id="section-3-2.3.1">A routing layer forwards requests from the shared listener to per-origin
+backends.<a href="#section-3-2.3.1" class="pilcrow">¶</a></p>
+</li>
+      </ol>
+<p id="section-3-3">Deployments in which all origins sharing a certificate are intentionally
+permitted to share backend state (i.e., no isolation boundary exists) are
+outside the primary scope of Section 6, though the detection guidance in
+Section 6.5 may still be useful for confirming intentional behavior.<a href="#section-3-3" class="pilcrow">¶</a></p>
+<p id="section-3-4">Single-origin deployments, deployments using per-origin certificates, and
+deployments where the HTTP/3 listener itself is the only backend (no
+upstream routing) are out of scope.<a href="#section-3-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="background-connection-coalescing">
+<section id="section-4">
+      <h2 id="name-background-connection-coale">
+<a href="#section-4" class="section-number selfRef">4. </a><a href="#name-background-connection-coale" class="section-name selfRef">Background: Connection Coalescing</a>
+      </h2>
+<div id="protocol-rules">
+<section id="section-4.1">
+        <h3 id="name-protocol-rules">
+<a href="#section-4.1" class="section-number selfRef">4.1. </a><a href="#name-protocol-rules" class="section-name selfRef">Protocol Rules</a>
+        </h3>
+<p id="section-4.1-1">HTTP/3 clients determine coalescing eligibility per <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3
+using two criteria applied at the transport/TLS layer:<a href="#section-4.1-1" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-4.1-2">
+<li id="section-4.1-2.1">
+            <p id="section-4.1-2.1.1">The TLS certificate already negotiated on an open connection is valid for
+the second origin's hostname (via SAN or wildcard match).<a href="#section-4.1-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-4.1-2.2">
+            <p id="section-4.1-2.2.1">DNS resolution for the second origin's hostname yields an IP address that
+the client's stack considers equivalent to the address already in use for
+the existing connection.<a href="#section-4.1-2.2.1" class="pilcrow">¶</a></p>
+</li>
+        </ol>
+<p id="section-4.1-3">The standard does not mandate strict IP-address equality as the sole
+definition of "equivalent address"; implementations MAY apply their own
+equivalence criteria. Infrastructure MUST NOT assume that a given HTTP/3
+connection will carry requests for only the origin used to establish it.<a href="#section-4.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="relationship-to-http2-coalescing">
+<section id="section-4.2">
+        <h3 id="name-relationship-to-http-2-coal">
+<a href="#section-4.2" class="section-number selfRef">4.2. </a><a href="#name-relationship-to-http-2-coal" class="section-name selfRef">Relationship to HTTP/2 Coalescing</a>
+        </h3>
+<p id="section-4.2-1">HTTP/2 <span>[<a href="#RFC9113" class="cite xref">RFC9113</a>]</span> Section 9.1.1 defines a structurally identical coalescing
+mechanism: a client MAY reuse an existing connection for a second origin when
+the server's TLS certificate is valid for that origin and the same IP address
+is in use. The same stale-routing exposure described in this document therefore
+applies to HTTP/2 deployments sharing certificates across isolation boundaries.
+The present document is scoped to HTTP/3 for two reasons:<a href="#section-4.2-1" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-4.2-2">
+<li id="section-4.2-2.1">
+            <p id="section-4.2-2.1.1">QUIC's UDP-based transport and built-in connection migration
+(<span>[<a href="#RFC9000" class="cite xref">RFC9000</a>]</span> Section 9) make it significantly harder for intermediaries to
+correlate a given packet flow with the origin that established the
+original connection, increasing the opacity of coalescing to infrastructure.<a href="#section-4.2-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-4.2-2.2">
+            <p id="section-4.2-2.2.1">HTTP/3 deployments are more likely to aggregate multiple tenants behind a
+single QUIC listener at a CDN or cloud edge, amplifying the blast radius
+when a routing layer misconfiguration is present.<a href="#section-4.2-2.2.1" class="pilcrow">¶</a></p>
+</li>
+        </ol>
+<p id="section-4.2-3">Operators of HTTP/2 infrastructure sharing certificates across isolation
+boundaries SHOULD apply the per-request host revalidation guidance in
+Section 6.1 equally to HTTP/2 connections. A parallel BCP addressing the
+HTTP/2 case may be warranted; that work is outside the scope of this document.<a href="#section-4.2-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="client-behavior-variance">
+<section id="section-4.3">
+        <h3 id="name-client-behavior-variance">
+<a href="#section-4.3" class="section-number selfRef">4.3. </a><a href="#name-client-behavior-variance" class="section-name selfRef">Client Behavior Variance</a>
+        </h3>
+<p id="section-4.3-1">Client behavior with respect to coalescing-eligibility strictness is
+implementation-defined. Different browser and library implementations may
+apply different levels of address-equivalence checking, and this behavior
+may change across software versions. Server-side mitigations defined in
+Section 6 MUST NOT depend on any particular client-side coalescing behavior
+remaining constant (see also Section 7).<a href="#section-4.3-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="connection-contamination-threat-description">
+<section id="section-5">
+      <h2 id="name-connection-contamination-th">
+<a href="#section-5" class="section-number selfRef">5. </a><a href="#name-connection-contamination-th" class="section-name selfRef">Connection Contamination: Threat Description</a>
+      </h2>
+<div id="attacker-model">
+<section id="section-5.1">
+        <h3 id="name-attacker-model">
+<a href="#section-5.1" class="section-number selfRef">5.1. </a><a href="#name-attacker-model" class="section-name selfRef">Attacker Model</a>
+        </h3>
+<p id="section-5.1-1">The attacker is assumed to be a party able to open an HTTP/3 connection to
+at least one origin in a shared-certificate set, but without authorization to
+access one or more other origins covered by the same certificate. This
+encompasses:<a href="#section-5.1-1" class="pilcrow">¶</a></p>
+<ul class="normal">
+<li class="normal" id="section-5.1-2.1">
+            <p id="section-5.1-2.1.1">A co-tenant in a multi-tenant SaaS deployment who holds legitimate credentials
+for their own tenant origin but not for other tenants.<a href="#section-5.1-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li class="normal" id="section-5.1-2.2">
+            <p id="section-5.1-2.2.1">An external client who can resolve and reach a lower-trust origin (e.g., a
+marketing or staging hostname) that shares a wildcard certificate with a
+higher-trust origin (e.g., an authentication or payment endpoint).<a href="#section-5.1-2.2.1" class="pilcrow">¶</a></p>
+</li>
+          <li class="normal" id="section-5.1-2.3">
+            <p id="section-5.1-2.3.1">An attacker performing targeted cross-origin exfiltration by constructing
+coalescing-eligible connections before issuing a forged-authority request.<a href="#section-5.1-2.3.1" class="pilcrow">¶</a></p>
+</li>
+        </ul>
+<p id="section-5.1-3">The attacker does not need to compromise TLS, QUIC, or any cryptographic
+primitive. The attack is entirely at the HTTP routing layer and requires only
+a valid HTTP/3 client.<a href="#section-5.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="threat-conditions">
+<section id="section-5.2">
+        <h3 id="name-threat-conditions">
+<a href="#section-5.2" class="section-number selfRef">5.2. </a><a href="#name-threat-conditions" class="section-name selfRef">Threat Conditions</a>
+        </h3>
+<p id="section-5.2-1">Connection contamination requires all three of the following conditions to
+hold simultaneously:<a href="#section-5.2-1" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-5.2-2">
+<li id="section-5.2-2.1">
+            <p id="section-5.2-2.1.1">A TLS certificate whose scope, via wildcard or multi-SAN issuance,
+covers two or more origins that are intended to be logically or
+organizationally isolated from one another.<a href="#section-5.2-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-5.2-2.2">
+            <p id="section-5.2-2.2.1">A client willing to coalesce an existing HTTP/3 connection onto a second
+origin covered by that certificate, per Section 4.<a href="#section-5.2-2.2.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-5.2-2.3">
+            <p id="section-5.2-2.3.1">A routing layer that determines backend routing using a signal other than
+the effective request host (<code>:authority</code>) re-evaluated on every individual
+request -- for example, a cached association formed from the connection's
+first request, or a routing key read once from the TLS SNI or QUIC
+connection metadata rather than per request.<a href="#section-5.2-2.3.1" class="pilcrow">¶</a></p>
+</li>
+        </ol>
+</section>
+</div>
+<div id="attack-path">
+<section id="section-5.3">
+        <h3 id="name-attack-path">
+<a href="#section-5.3" class="section-number selfRef">5.3. </a><a href="#name-attack-path" class="section-name selfRef">Attack Path</a>
+        </h3>
+<p id="section-5.3-1">The following illustrates a typical contamination scenario in a multi-tenant
+CDN-fronted deployment:<a href="#section-5.3-1" class="pilcrow">¶</a></p>
+<div class="alignLeft art-text artwork" id="section-5.3-2">
+<pre>
+Step 1 — Legitimate connection establishment:
+  Client ──[QUIC handshake, SNI=tenant-a.example.com]──▶ CDN Edge
+  CDN Edge: stores routing key "backend-A" keyed on connection ID
+  CDN Edge ──▶ backend-A
+
+Step 2 — Coalescing-eligible second request:
+  Client (same connection): :authority = tenant-b.example.com
+  CDN Edge: looks up routing key by connection ID → "backend-A"
+  CDN Edge ──▶ backend-A   ← WRONG: should route to backend-B
+
+Result:
+  Tenant B's request is served by backend-A.
+  Tenant A's response queue may be interleaved with Tenant B's traffic.
+</pre><a href="#section-5.3-2" class="pilcrow">¶</a>
+</div>
+</section>
+</div>
+<div id="potential-consequences">
+<section id="section-5.4">
+        <h3 id="name-potential-consequences">
+<a href="#section-5.4" class="section-number selfRef">5.4. </a><a href="#name-potential-consequences" class="section-name selfRef">Potential Consequences</a>
+        </h3>
+<p id="section-5.4-1">Where the three conditions in Section 5.2 hold, the following effects are
+possible:<a href="#section-5.4-1" class="pilcrow">¶</a></p>
+<ul class="normal">
+<li class="normal" id="section-5.4-2.1">
+            <p id="section-5.4-2.1.1"><strong>Cross-tenant data leakage</strong>: Responses intended for one backend may be
+returned to a client of a different backend if response queues are shared
+or not strictly isolated per request.<a href="#section-5.4-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li class="normal" id="section-5.4-2.2">
+            <p id="section-5.4-2.2.1"><strong>Authentication bypass</strong>: If the contaminated backend performs
+authorization checks relative to the connection's original SNI rather than
+the request's <code>:authority</code>, a lower-privileged client may access
+higher-privileged resources.<a href="#section-5.4-2.2.1" class="pilcrow">¶</a></p>
+</li>
+          <li class="normal" id="section-5.4-2.3">
+            <p id="section-5.4-2.3.1"><strong>Cache contamination</strong>: A CDN or shared cache layer may store a response
+under a cache key derived from the victim origin, poisoning subsequent
+legitimate requests to that origin. Mitigations for this impact are
+addressed in Section 6.5.<a href="#section-5.4-2.3.1" class="pilcrow">¶</a></p>
+</li>
+          <li class="normal" id="section-5.4-2.4">
+            <p id="section-5.4-2.4.1"><strong>Response queue interference</strong>: Analogous to HTTP request smuggling
+<span>[<a href="#REQUESTSMUGGLING" class="cite xref">REQUESTSMUGGLING</a>]</span>, interleaved responses on a shared backend connection
+can cause response desynchronization.<a href="#section-5.4-2.4.1" class="pilcrow">¶</a></p>
+</li>
+        </ul>
+<p id="section-5.4-3">The underlying mechanism here is QUIC-specific connection reuse and stale
+routing, distinct from the ambiguous header parsing that enables classical
+HTTP request smuggling <span>[<a href="#REQUESTSMUGGLING" class="cite xref">REQUESTSMUGGLING</a>]</span>.<a href="#section-5.4-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="recommendations">
+<section id="section-6">
+      <h2 id="name-recommendations">
+<a href="#section-6" class="section-number selfRef">6. </a><a href="#name-recommendations" class="section-name selfRef">Recommendations</a>
+      </h2>
+<p id="section-6-1">The following recommendations apply to operators and implementers of
+HTTP/3-terminating infrastructure -- reverse proxies, load balancers, and
+CDN edges -- that front more than one origin behind a shared TLS certificate.<a href="#section-6-1" class="pilcrow">¶</a></p>
+<div id="per-request-host-revalidation">
+<section id="section-6.1">
+        <h3 id="name-per-request-host-revalidati">
+<a href="#section-6.1" class="section-number selfRef">6.1. </a><a href="#name-per-request-host-revalidati" class="section-name selfRef">Per-Request Host Revalidation</a>
+        </h3>
+<p id="section-6.1-1">A routing layer terminating HTTP/3 connections MUST re-evaluate the
+effective request host -- the value of the <code>:authority</code> pseudo-header field
+(<span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span> Section 7.2) -- on every individual request received on a
+connection, and MUST NOT rely solely on a routing decision cached from
+connection establishment, from the TLS SNI negotiated at handshake, or from
+an earlier request on the same connection.<a href="#section-6.1-1" class="pilcrow">¶</a></p>
+<p id="section-6.1-2">Where a routing layer determines that a request's <code>:authority</code> value does not
+correspond to an origin it can properly serve on the connection on which the
+request arrived, it MUST respond with <code>421 (Misdirected Request)</code>
+(<span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span> Sections 7.4 and 15.5.20) rather than forwarding the request to
+an incorrect backend.<a href="#section-6.1-2" class="pilcrow">¶</a></p>
+<p id="section-6.1-3">These requirements reflect current practice among major HTTP/3 reverse proxy
+implementations (e.g., Nginx, Envoy, and Caddy each perform per-request
+<code>:authority</code> evaluation by default when virtual-host routing is configured)
+and are consistent with the server behavior already anticipated by
+<span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3. The MUST level is warranted because silent
+incorrect routing -- the failure mode in the absence of this requirement --
+constitutes a data-isolation breach with no observable signal to the affected
+tenant.<a href="#section-6.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="certificate-scope-minimization">
+<section id="section-6.2">
+        <h3 id="name-certificate-scope-minimizat">
+<a href="#section-6.2" class="section-number selfRef">6.2. </a><a href="#name-certificate-scope-minimizat" class="section-name selfRef">Certificate Scope Minimization</a>
+        </h3>
+<p id="section-6.2-1">Operators SHOULD NOT deploy a TLS certificate whose SAN or wildcard scope
+spans origins with differing trust levels or isolation requirements. Where
+broad-scope certificates are operationally necessary (for example, in
+multi-tenant SaaS hosting or large-scale CDN deployments), the routing layer
+behind that certificate MUST implement per-request host revalidation as
+described in Section 6.1 without exception.<a href="#section-6.2-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="sni-and-authority-consistency-enforcement">
+<section id="section-6.3">
+        <h3 id="name-sni-and-authority-consisten">
+<a href="#section-6.3" class="section-number selfRef">6.3. </a><a href="#name-sni-and-authority-consisten" class="section-name selfRef">SNI and :authority Consistency Enforcement</a>
+        </h3>
+<p id="section-6.3-1">A routing layer SHOULD compare the TLS SNI value presented at handshake with
+the <code>:authority</code> pseudo-header of each subsequent request on the same
+connection. A mismatch between SNI and <code>:authority</code> is a reliable indicator
+of a coalesced request and SHOULD trigger revalidation logic. Where the
+routing layer cannot serve the <code>:authority</code> value on the current connection,
+it MUST respond with <code>421 (Misdirected Request)</code> per <span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span> Section
+15.5.20, allowing compliant clients to retry on a new connection.<a href="#section-6.3-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="trust-boundary-segmentation">
+<section id="section-6.4">
+        <h3 id="name-trust-boundary-segmentation">
+<a href="#section-6.4" class="section-number selfRef">6.4. </a><a href="#name-trust-boundary-segmentation" class="section-name selfRef">Trust-Boundary Segmentation</a>
+        </h3>
+<p id="section-6.4-1">Where isolation requirements differ significantly between origins (for
+example, an origin handling authentication or payment functions versus a
+marketing or staging origin), operators SHOULD segment HTTP/3 listeners such
+that high-isolation origins are not reachable via a certificate shared with
+lower-trust origins. This segmentation SHOULD be implemented as defense in
+depth, independent of whether Section 6.1 is correctly implemented.<a href="#section-6.4-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="cache-contamination-mitigation">
+<section id="section-6.5">
+        <h3 id="name-cache-contamination-mitigat">
+<a href="#section-6.5" class="section-number selfRef">6.5. </a><a href="#name-cache-contamination-mitigat" class="section-name selfRef">Cache Contamination Mitigation</a>
+        </h3>
+<p id="section-6.5-1">When a routing layer is co-located with or upstream of a shared cache, the
+following additional controls MUST or SHOULD be applied to prevent cache
+contamination (one of the consequences identified in Section 5.4):<a href="#section-6.5-1" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-6.5-2">
+<li id="section-6.5-2.1">
+            <p id="section-6.5-2.1.1">Cache keys MUST include the effective request host (<code>:authority</code> value)
+and MUST NOT be derived solely from connection-level metadata such as the
+TLS SNI or QUIC connection ID.<a href="#section-6.5-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-6.5-2.2">
+            <p id="section-6.5-2.2.1">Routing layers SHOULD propagate a verified, normalized host value to
+upstream caches as part of the forwarded request rather than relying on
+the cache to re-derive it independently.<a href="#section-6.5-2.2.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-6.5-2.3">
+            <p id="section-6.5-2.3.1">Cache entries associated with a given origin MUST NOT be served in
+response to a request whose <code>:authority</code> names a different origin, even
+when both origins are covered by the same TLS certificate.<a href="#section-6.5-2.3.1" class="pilcrow">¶</a></p>
+</li>
+        </ol>
+<p id="section-6.5-3">Operators SHOULD audit cache-key configuration on shared caches whenever
+per-request host revalidation (Section 6.1) is first deployed, as correcting
+routing behavior without correcting cache-key derivation leaves the cache
+contamination consequence unmitigated.<a href="#section-6.5-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="detection-guidance">
+<section id="section-6.6">
+        <h3 id="name-detection-guidance">
+<a href="#section-6.6" class="section-number selfRef">6.6. </a><a href="#name-detection-guidance" class="section-name selfRef">Detection Guidance</a>
+        </h3>
+<p id="section-6.6-1">Operators assessing existing infrastructure for this exposure SHOULD:<a href="#section-6.6-1" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-6.6-2">
+<li id="section-6.6-2.1">
+            <p id="section-6.6-2.1.1">Enumerate the full SAN and wildcard scope of each TLS certificate served
+on HTTP/3 listeners in scope.<a href="#section-6.6-2.1.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-6.6-2.2">
+            <p id="section-6.6-2.2.1">For each pair of hostnames sharing a certificate, determine whether a
+client would consider them coalescing-eligible per Section 4 and
+<span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3.<a href="#section-6.6-2.2.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-6.6-2.3">
+            <p id="section-6.6-2.3.1">For each coalescing-eligible pair, verify -- via authorized testing only --
+that a request specifying the second hostname's <code>:authority</code>, issued on a
+connection established against the first hostname, is either:<a href="#section-6.6-2.3.1" class="pilcrow">¶</a></p>
+<ul class="normal">
+<li class="normal" id="section-6.6-2.3.2.1">
+                <p id="section-6.6-2.3.2.1.1">Rejected with <code>421 (Misdirected Request)</code> per <span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span> Section 15.5.20, or<a href="#section-6.6-2.3.2.1.1" class="pilcrow">¶</a></p>
+</li>
+              <li class="normal" id="section-6.6-2.3.2.2">
+                <p id="section-6.6-2.3.2.2.1">Independently re-routed to the correct backend for the second hostname.<a href="#section-6.6-2.3.2.2.1" class="pilcrow">¶</a></p>
+</li>
+            </ul>
+</li>
+          <li id="section-6.6-2.4">
+            <p id="section-6.6-2.4.1">Confirm that no routing state keyed on connection ID, QUIC connection
+metadata, or TLS session parameters persists across requests in a way
+that could override per-request <code>:authority</code> evaluation.<a href="#section-6.6-2.4.1" class="pilcrow">¶</a></p>
+</li>
+          <li id="section-6.6-2.5">
+            <p id="section-6.6-2.5.1">Verify that cache keys on any shared cache layer include the effective
+request host and cannot be collided across tenant origins.<a href="#section-6.6-2.5.1" class="pilcrow">¶</a></p>
+</li>
+        </ol>
+<p id="section-6.6-3">Operators performing this verification SHOULD use non-destructive, read-only
+requests and MUST NOT perform this testing against infrastructure without
+explicit authorization from the system owner.<a href="#section-6.6-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="security-considerations">
+<section id="section-7">
+      <h2 id="name-security-considerations">
+<a href="#section-7" class="section-number selfRef">7. </a><a href="#name-security-considerations" class="section-name selfRef">Security Considerations</a>
+      </h2>
+<p id="section-7-1">This entire document concerns a security exposure and its mitigation;
+Section 6 constitutes its primary normative guidance.<a href="#section-7-1" class="pilcrow">¶</a></p>
+<div id="client-behavior-must-not-be-assumed-stable">
+<section id="section-7.1">
+        <h3 id="name-client-behavior-must-not-be">
+<a href="#section-7.1" class="section-number selfRef">7.1. </a><a href="#name-client-behavior-must-not-be" class="section-name selfRef">Client Behavior Must Not Be Assumed Stable</a>
+        </h3>
+<p id="section-7.1-1">Browser and library client behavior with respect to the strictness of
+coalescing-eligibility evaluation (Section 4.1) is an implementation choice
+that is not guaranteed by <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> or <span>[<a href="#RFC9000" class="cite xref">RFC9000</a>]</span> and may vary across
+client versions. Server-side mitigations per Section 6 MUST NOT depend on
+any particular client-side coalescing behavior remaining constant. A more
+permissive future client implementation would silently expand the exposure
+window for infrastructure that relied on current client behavior as a
+mitigating control.<a href="#section-7.1-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="connection-migration-interaction">
+<section id="section-7.2">
+        <h3 id="name-connection-migration-intera">
+<a href="#section-7.2" class="section-number selfRef">7.2. </a><a href="#name-connection-migration-intera" class="section-name selfRef">Connection Migration Interaction</a>
+        </h3>
+<p id="section-7.2-1">QUIC connection migration (<span>[<a href="#RFC9000" class="cite xref">RFC9000</a>]</span> Section 9) allows a QUIC connection
+to survive changes in the client's network path (e.g., switching from Wi-Fi
+to cellular). Migration does not materially change the threat surface
+described in this document: the connection and its associated TLS session
+remain the same object, coalescing eligibility criteria are unaffected, and
+routing-layer state keyed on connection ID survives the migration. Operators
+SHOULD NOT treat connection migration as a mitigating factor for connection
+contamination.<a href="#section-7.2-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="misdirected-request-as-a-defense-mechanism">
+<section id="section-7.3">
+        <h3 id="name-421-misdirected-request-as-">
+<a href="#section-7.3" class="section-number selfRef">7.3. </a><a href="#name-421-misdirected-request-as-" class="section-name selfRef">421 Misdirected Request as a Defense Mechanism</a>
+        </h3>
+<p id="section-7.3-1">The <code>421 (Misdirected Request)</code> status code defined in <span>[<a href="#RFC9110" class="cite xref">RFC9110</a>]</span>
+Section 15.5.20 was introduced specifically to handle the case in which a
+server receives a request on a connection it cannot properly serve for
+that target origin. <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> Section 3.3 already identifies this status
+code as the mechanism by which a server opts out of connection reuse for
+a given origin -- this document does not introduce new protocol behavior,
+but elevates an existing, currently discretionary ("can indicate")
+mechanism to a normative requirement (Section 6.1) for the specific
+class of deployment described in Section 4, where the isolation stakes
+of an incorrect reuse decision are high. Correct implementation of 421
+responses at routing layers is therefore not merely a best practice but
+the base specification's own designated defense, and is the primary
+normative defense against connection contamination described in this
+document. Implementations that suppress or translate 421 responses
+negate this defense.<a href="#section-7.3-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="scope-of-normative-requirements">
+<section id="section-7.4">
+        <h3 id="name-scope-of-normative-requirem">
+<a href="#section-7.4" class="section-number selfRef">7.4. </a><a href="#name-scope-of-normative-requirem" class="section-name selfRef">Scope of Normative Requirements</a>
+        </h3>
+<p id="section-7.4-1">The normative requirements in Section 6 are addressed to routing-layer
+implementers and operators. They do not impose requirements on HTTP/3 client
+implementations, which are governed by <span>[<a href="#RFC9114" class="cite xref">RFC9114</a>]</span> and <span>[<a href="#RFC9000" class="cite xref">RFC9000</a>]</span>.<a href="#section-7.4-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="iana-considerations">
+<section id="section-8">
+      <h2 id="name-iana-considerations">
+<a href="#section-8" class="section-number selfRef">8. </a><a href="#name-iana-considerations" class="section-name selfRef">IANA Considerations</a>
+      </h2>
+<p id="section-8-1">This document has no IANA actions.<a href="#section-8-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="sec-combined-references">
+<section id="section-9">
+      <h2 id="name-references">
+<a href="#section-9" class="section-number selfRef">9. </a><a href="#name-references" class="section-name selfRef">References</a>
+      </h2>
+<div id="sec-normative-references">
+<section id="section-9.1">
+        <h3 id="name-normative-references">
+<a href="#section-9.1" class="section-number selfRef">9.1. </a><a href="#name-normative-references" class="section-name selfRef">Normative References</a>
+        </h3>
+<dl class="references">
+<dt id="RFC2119">[RFC2119]</dt>
+        <dd>
+<span class="refAuthor">Bradner, S.</span>, <span class="refTitle">"Key words for use in RFCs to Indicate Requirement Levels"</span>, <span class="seriesInfo">BCP 14</span>, <span class="seriesInfo">RFC 2119</span>, <span class="seriesInfo">DOI 10.17487/RFC2119</span>, <time datetime="1997-03" class="refDate">March 1997</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc2119">https://www.rfc-editor.org/rfc/rfc2119</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC6454">[RFC6454]</dt>
+        <dd>
+<span class="refAuthor">Barth, A.</span>, <span class="refTitle">"The Web Origin Concept"</span>, <span class="seriesInfo">RFC 6454</span>, <span class="seriesInfo">DOI 10.17487/RFC6454</span>, <time datetime="2011-12" class="refDate">December 2011</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc6454">https://www.rfc-editor.org/rfc/rfc6454</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8174">[RFC8174]</dt>
+        <dd>
+<span class="refAuthor">Leiba, B.</span>, <span class="refTitle">"Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words"</span>, <span class="seriesInfo">BCP 14</span>, <span class="seriesInfo">RFC 8174</span>, <span class="seriesInfo">DOI 10.17487/RFC8174</span>, <time datetime="2017-05" class="refDate">May 2017</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc8174">https://www.rfc-editor.org/rfc/rfc8174</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8446">[RFC8446]</dt>
+        <dd>
+<span class="refAuthor">Rescorla, E.</span>, <span class="refTitle">"The Transport Layer Security (TLS) Protocol Version 1.3"</span>, <span class="seriesInfo">RFC 8446</span>, <span class="seriesInfo">DOI 10.17487/RFC8446</span>, <time datetime="2018-08" class="refDate">August 2018</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc8446">https://www.rfc-editor.org/rfc/rfc8446</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9000">[RFC9000]</dt>
+        <dd>
+<span class="refAuthor">Iyengar, J., Ed.</span> and <span class="refAuthor">M. Thomson, Ed.</span>, <span class="refTitle">"QUIC: A UDP-Based Multiplexed and Secure Transport"</span>, <span class="seriesInfo">RFC 9000</span>, <span class="seriesInfo">DOI 10.17487/RFC9000</span>, <time datetime="2021-05" class="refDate">May 2021</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc9000">https://www.rfc-editor.org/rfc/rfc9000</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9110">[RFC9110]</dt>
+        <dd>
+<span class="refAuthor">Fielding, R., Ed.</span>, <span class="refAuthor">Nottingham, M., Ed.</span>, and <span class="refAuthor">J. Reschke, Ed.</span>, <span class="refTitle">"HTTP Semantics"</span>, <span class="seriesInfo">STD 97</span>, <span class="seriesInfo">RFC 9110</span>, <span class="seriesInfo">DOI 10.17487/RFC9110</span>, <time datetime="2022-06" class="refDate">June 2022</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc9110">https://www.rfc-editor.org/rfc/rfc9110</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9114">[RFC9114]</dt>
+      <dd>
+<span class="refAuthor">Bishop, M., Ed.</span>, <span class="refTitle">"HTTP/3"</span>, <span class="seriesInfo">RFC 9114</span>, <span class="seriesInfo">DOI 10.17487/RFC9114</span>, <time datetime="2022-06" class="refDate">June 2022</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc9114">https://www.rfc-editor.org/rfc/rfc9114</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+</dl>
+</section>
+</div>
+<div id="sec-informative-references">
+<section id="section-9.2">
+        <h3 id="name-informative-references">
+<a href="#section-9.2" class="section-number selfRef">9.2. </a><a href="#name-informative-references" class="section-name selfRef">Informative References</a>
+        </h3>
+<dl class="references">
+<dt id="COMSNETS2024">[COMSNETS2024]</dt>
+        <dd>
+<span class="refAuthor">Badiger, A. A.</span>, <span class="refAuthor">Kulkarni, S. G.</span>, <span class="refTitle">"Security and Service Vulnerabilities with HTTP/3"</span>, <span class="seriesInfo">2024 16th International Conference on COMmunication Systems &amp; NETworkS (COMSNETS), Bengaluru, India pp. 55-60, doi: 10.1109/COMSNETS59351.2024.10427406</span>, <time datetime="2024" class="refDate">2024</time>, <span>&lt;<a href="https://ieeexplore.ieee.org/document/10427406">https://ieeexplore.ieee.org/document/10427406</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="KETTLE2022">[KETTLE2022]</dt>
+        <dd>
+<span class="refAuthor">Kettle, J.</span>, <span class="refTitle">"HTTP Request Smuggling, Reconsidered"</span>, <span class="seriesInfo">Black Hat USA 2022 Briefings Las Vegas, NV, USA</span>, <time datetime="2022" class="refDate">2022</time>, <span>&lt;<a href="https://i.blackhat.com/USA-22/Wednesday/US-22-Kettle-HTTP-Desync-Attacks.pdf">https://i.blackhat.com/USA-22/Wednesday/US-22-Kettle-HTTP-Desync-Attacks.pdf</a>&gt;</span>. <span class="annotation">Includes discussion of connection-scope routing hazards and the HTTP/3 connection-contamination class; presented at Black Hat USA 2022.</span>
+        </dd>
+<dd class="break"></dd>
+<dt id="REQUESTSMUGGLING">[REQUESTSMUGGLING]</dt>
+        <dd>
+<span class="refAuthor">Kettle, J.</span>, <span class="refTitle">"HTTP Request Smuggling"</span>, <span class="seriesInfo">DEF CON 27 AppSec Village Las Vegas, NV, USA</span>, <time datetime="2019" class="refDate">2019</time>, <span>&lt;<a href="https://www.defcon.org/html/defcon-27/dc-27-speakers.html#Kettle">https://www.defcon.org/html/defcon-27/dc-27-speakers.html#Kettle</a>&gt;</span>. <span class="annotation">Original public presentation of HTTP request-smuggling techniques; referenced here to establish analogy with response-queue interference described in Section 5.4.</span>
+        </dd>
+<dd class="break"></dd>
+<dt id="RFC9113">[RFC9113]</dt>
+      <dd>
+<span class="refAuthor">Thomson, M., Ed.</span> and <span class="refAuthor">C. Benfield, Ed.</span>, <span class="refTitle">"HTTP/2"</span>, <span class="seriesInfo">RFC 9113</span>, <span class="seriesInfo">DOI 10.17487/RFC9113</span>, <time datetime="2022-06" class="refDate">June 2022</time>, <span>&lt;<a href="https://www.rfc-editor.org/rfc/rfc9113">https://www.rfc-editor.org/rfc/rfc9113</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+</dl>
+</section>
+</div>
+</section>
+</div>
+<div id="acknowledgments">
+<section id="appendix-A">
+      <h2 id="name-acknowledgments">
+<a href="#name-acknowledgments" class="section-name selfRef">Acknowledgments</a>
+      </h2>
+<p id="appendix-A-1">The author acknowledges the original public research on this exposure class by
+James Kettle of PortSwigger Research <span>[<a href="#KETTLE2022" class="cite xref">KETTLE2022</a>]</span>, on which the threat
+description in Section 5 draws directly. The author also acknowledges
+<span>[<a href="#COMSNETS2024" class="cite xref">COMSNETS2024</a>]</span> for characterizing related QUIC transport-layer security
+vulnerabilities in multi-tenant contexts.<a href="#appendix-A-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="changes-from-00">
+<section id="appendix-B">
+      <h2 id="name-changes-from-00">
+<a href="#name-changes-from-00" class="section-name selfRef">Changes from -00</a>
+      </h2>
+<p id="appendix-B-1">This is the initial submission (-00) of this document.<a href="#appendix-B-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="authors-addresses">
+<section id="appendix-C">
+      <h2 id="name-authors-address">
+<a href="#name-authors-address" class="section-name selfRef">Author's Address</a>
+      </h2>
+<address class="vcard">
+        <div dir="auto" class="left"><span class="fn nameRole">Madhusudhan Rajappa</span></div>
+<div dir="auto" class="left"><span class="org">IBM</span></div>
+<div class="email">
+<span>Email:</span>
+<a href="mailto:madhu.sudhan@in.ibm.com" class="email">madhu.sudhan@in.ibm.com</a>
+</div>
+</address>
+</section>
+</div>
+<script>const toc = document.getElementById("toc");
+toc.querySelector("h2").addEventListener("click", e => {
+  toc.classList.toggle("active");
+});
+toc.querySelector("nav").addEventListener("click", e => {
+  toc.classList.remove("active");
+});
+</script>
+</body>
+</html>
