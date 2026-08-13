@@ -8,9 +8,9 @@ IETF Internet-Draft · BCP · [httpbis](https://datatracker.ietf.org/wg/httpbis/
 
 ## Abstract
 
-HTTP/3 clients commonly reuse ("coalesce") an existing QUIC connection for requests to a second origin when the TLS certificate on that connection is also valid for the second origin. A security-relevant side effect arises when a routing layer — reverse proxy, load balancer, or CDN edge — determines backend routing using a signal fixed at connection setup rather than re-evaluated per request. Under that condition, a coalesced connection can reach an unintended backend origin, potentially enabling **cross-tenant data leakage**, **authentication bypass**, **cache contamination**, and **response-queue interference** analogous to HTTP request smuggling.
+HTTP/3 clients commonly reuse ("coalesce") an existing QUIC connection for requests to a second origin when the TLS certificate on that connection is also valid for the second origin. A security-relev[...]
 
-This document defines the underlying mechanism, characterizes the attacker model, distinguishes connection contamination from related QUIC exposures, and provides normative operational guidance for implementers and operators of HTTP/3-terminating infrastructure.
+This document defines the underlying mechanism, characterizes the attacker model, distinguishes connection contamination from related QUIC exposures, and provides normative operational guidance for im[...]
 
 ---
 
@@ -97,13 +97,13 @@ xml2rfc draft-rajappa-httpbis-connection-contamination-01.xml \
 | Version | Date | Notes |
 |---|---|---|
 | `-00` | 2026-08-13 | Initial submission |
-| `-01` | 2026-08-13 | Fixed stale cross-references (§5.4, §6.2, §6.3); added §6.5 cache contamination mitigation; expanded HTTP/2 parallel note (§4.2) with parallel-BCP pointer; justified revalidation MUSTs with implementation evidence; upgraded non-archival references to conference proceedings; moved RFC 2119 boilerplate to §2; corrected xml2rfc `{:unnumbered}` syntax in appendices; added missing COMSNETS 2024 first author |
+| `-01` | 2026-08-13 | Fixed stale cross-references (§5.4, §6.2, §6.3); added §6.5 cache contamination mitigation; expanded HTTP/2 parallel note (§4.2) with parallel-BCP pointer; justified revali[...]
 
 ---
 
 ## Contributing / Feedback
 
-This draft is targeting the [httpbis](https://datatracker.ietf.org/wg/httpbis/about/) working group. Discussion should occur on the [httpbis mailing list](https://lists.w3.org/Archives/Public/ietf-http-wg/).
+This draft is targeting the [httpbis](https://datatracker.ietf.org/wg/httpbis/about/) working group. Discussion should occur on the [httpbis mailing list](https://lists.w3.org/Archives/Public/ietf-htt[...]
 
 Issues and pull requests against this repository are welcome for editorial corrections. Substantive technical feedback is best directed to the mailing list.
 
