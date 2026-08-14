@@ -8,9 +8,9 @@ IETF Internet-Draft · BCP · [httpbis](https://datatracker.ietf.org/wg/httpbis/
 
 ## Abstract
 
-HTTP/3 clients commonly reuse ("coalesce") an existing QUIC connection for requests to a second origin when the TLS certificate on that connection is also valid for the second origin. A security-relev[...]
+HTTP/3 clients commonly reuse ("coalesce") an existing QUIC connection for requests to a second origin when the TLS certificate on that connection is also valid for the second origin. A security-relev[...] 
 
-This document defines the underlying mechanism, characterizes the attacker model, distinguishes connection contamination from related QUIC exposures, and provides normative operational guidance for im[...]
+This document defines the underlying mechanism, characterizes the attacker model, distinguishes connection contamination from related QUIC exposures, and provides normative operational guidance for im[...] 
 
 ---
 
@@ -18,7 +18,7 @@ This document defines the underlying mechanism, characterizes the attacker model
 
 | Field | Value |
 |---|---|
-| Docname | `draft-rajappa-httpbis-connection-contamination-01` |
+| Docname | `draft-rajappa-httpbis-connection-contamination-02` |
 | Category | Best Current Practice (BCP) |
 | Submission | IETF |
 | Area | Applications and Real-Time |
@@ -31,7 +31,7 @@ This document defines the underlying mechanism, characterizes the attacker model
 
 | File | Description |
 |---|---|
-| [`draft-rajappa-httpbis-connection-contamination-01.mkd`](draft-rajappa-httpbis-connection-contamination-01.mkd) | Current draft source (mmark / xml2rfc Markdown) |
+| [`draft-rajappa-httpbis-connection-contamination-02.mkd`](draft-rajappa-httpbis-connection-contamination-02.mkd) | Current draft source (mmark / xml2rfc Markdown) |
 | [`draft-rajappa-httpbis-connection-contamination-00.mkd`](draft-rajappa-httpbis-connection-contamination-00.mkd) | Initial submission (-00) |
 
 ---
@@ -46,10 +46,10 @@ pip install xml2rfc
 brew install mmark          # macOS; or see https://mmark.miek.nl
 
 # Build HTML and text outputs
-mmark draft-rajappa-httpbis-connection-contamination-01.mkd \
-      > draft-rajappa-httpbis-connection-contamination-01.xml
+mmark draft-rajappa-httpbis-connection-contamination-02.mkd \
+      > draft-rajappa-httpbis-connection-contamination-02.xml
 
-xml2rfc draft-rajappa-httpbis-connection-contamination-01.xml \
+xml2rfc draft-rajappa-httpbis-connection-contamination-02.xml \
         --html --text
 ```
 
@@ -97,15 +97,21 @@ xml2rfc draft-rajappa-httpbis-connection-contamination-01.xml \
 | Version | Date | Notes |
 |---|---|---|
 | `-00` | 2026-08-13 | Initial submission |
-| `-01` | 2026-08-13 | Fixed stale cross-references (§5.4, §6.2, §6.3); added §6.5 cache contamination mitigation; expanded HTTP/2 parallel note (§4.2) with parallel-BCP pointer; justified revali[...]
+| `-01` | 2026-08-13 | Fixed stale cross-references (§5.4, §6.2, §6.3); added §6.5 cache contamination mitigation; expanded HTTP/2 parallel note (§4.2) with parallel-BCP pointer; justified revali[...] |
+| `-02` | 2026-08-13 | Corrected two reference errors: the [KETTLE2022] entry was updated to cite the original PortSwigger research post that introduced the connection contamination terminology used throughout this document; the [COMSNETS2024] author list was corrected to list only the paper's actual two authors. |
 
 ---
 
 ## Contributing / Feedback
 
-This draft is targeting the [httpbis](https://datatracker.ietf.org/wg/httpbis/about/) working group. Discussion should occur on the [httpbis mailing list](https://lists.w3.org/Archives/Public/ietf-htt[...]
+This draft is targeting the [httpbis working group](https://datatracker.ietf.org/wg/httpbis/about/). Discussion and substantive technical feedback should be directed to the working group's public mailing list (ietf-http-wg@w3.org).
 
-Issues and pull requests against this repository are welcome for editorial corrections. Substantive technical feedback is best directed to the mailing list.
+Public archives of that list are available at:
+
+- https://lists.w3.org/Archives/Public/ietf-http-wg/
+- https://mailarchive.ietf.org/arch/browse/httpbisd/
+
+Issues and pull requests against this repository are welcome for editorial corrections. Editorial or repository-specific issues are fine to raise here; substantive technical feedback is best discussed on the mailing list.
 
 ---
 
